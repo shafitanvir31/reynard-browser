@@ -3,7 +3,7 @@ new file mode 100644
 index 000000000000..518377a5f5dd
 --- /dev/null
 +++ b/ipc/glue/NSExtensionUtils.mm
-@@ -0,0 +1,356 @@
+@@ -0,0 +1,426 @@
 +/* This Source Code Form is subject to the terms of the Mozilla Public
 + * License, v. 2.0. If a copy of the MPL was not distributed with this
 + * file, You can obtain one at http://mozilla.org/MPL/2.0/. */
@@ -99,7 +99,64 @@ index 000000000000..518377a5f5dd
 +  return [NSError errorWithDomain:@"ReynardExtension" code:1 userInfo:userInfo];
 +}
 +
++// When running inside LiveContainer, Reynard is never installed, so iOS
++// doesn't know about "Reynard Helper.appex". Use LiveContainer's own
++// LiveProcess extension instead and have it load GeckoView.framework as a
++// custom payload, which then does the same work as the helper.
++// https://github.com/LiveContainer/LiveContainer/blob/main/LiveProcess/main.m
++@interface NSUserDefaults (LiveContainer)
+++ (nullable NSBundle*)lcMainBundle;
++@end
++
++static NSBundle* _Nullable GetLiveContainerBundle() {
++  if (![NSUserDefaults respondsToSelector:@selector(lcMainBundle)]) {
++    return nil;
++  }
++  return [NSUserDefaults lcMainBundle];
++}
++
++static NSString* _Nullable GetLiveProcessIdentifier(NSBundle* aLCBundle) {
++  // In LiveContainer's multitask mode we are already running in LiveProcess.
++  if ([[aLCBundle bundlePath] hasSuffix:@"PlugIns/LiveProcess.appex"]) {
++    return [aLCBundle bundleIdentifier];
++  }
++
++  NSString* liveProcessPath = [[aLCBundle builtInPlugInsPath]
++      stringByAppendingPathComponent:@"LiveProcess.appex"];
++  return [[NSBundle bundleWithPath:liveProcessPath] bundleIdentifier];
++}
++
++static NSDictionary* _Nullable GetLiveContainerPayloadInfo() {
++  // LiveContainer swaps mainBundle for the guest app, so this is Reynard.app
++  // inside LiveContainer's Documents folder.
++  NSBundle* bundle = [NSBundle mainBundle];
++  NSString* geckoViewPath = [[bundle privateFrameworksPath]
++      stringByAppendingPathComponent:@"GeckoView.framework/GeckoView"];
++
++  // LiveProcess has its own sandbox and can't read LiveContainer's container,
++  // so hand it a security-scoped bookmark to the app bundle, the same way
++  // LiveContainer's multitasking does.
++  NSData* bundleBookmark = [[bundle bundleURL]
++               bookmarkDataWithOptions:(NSURLBookmarkCreationOptions)(1 << 11)
++        includingResourceValuesForKeys:nil
++                         relativeToURL:nil
++                                 error:nil];
++  if (!geckoViewPath || !bundleBookmark) {
++    return nil;
++  }
++
++  return @{
++    @"customPayloadDylib" : geckoViewPath,
++    @"customPayloadEntry" : @"ReynardLiveProcessMain",
++    @"bookmarks" : @[ bundleBookmark ],
++  };
++}
++
 +static NSString* _Nullable GetExtensionIdentifier() {
++  if (NSBundle* lcBundle = GetLiveContainerBundle()) {
++    return GetLiveProcessIdentifier(lcBundle);
++  }
++
 +  NSURL* plugInsURL = [[NSBundle mainBundle] builtInPlugInsURL];
 +  if (!plugInsURL) {
 +    return nil;
@@ -213,8 +270,21 @@ index 000000000000..518377a5f5dd
 +          @"NSExtension request interrupted before bootstrap"));
 +    }];
 +
++    NSMutableDictionary* userInfo = [NSMutableDictionary
++        dictionaryWithObject:[mListener endpoint]
++                      forKey:@"ReynardXPCListenerEndpoint"];
++    if (GetLiveContainerBundle()) {
++      NSDictionary* payloadInfo = GetLiveContainerPayloadInfo();
++      if (!payloadInfo) {
++        completeOnce(ExtensionLaunchError(
++            @"Unable to prepare LiveContainer LiveProcess payload"));
++        return;
++      }
++      [userInfo addEntriesFromDictionary:payloadInfo];
++    }
++
 +    NSExtensionItem* input = [[[NSExtensionItem alloc] init] autorelease];
-+    [input setUserInfo:@{@"ReynardXPCListenerEndpoint" : [mListener endpoint]}];
++    [input setUserInfo:userInfo];
 +
 +    NSError* requestError = nil;
 +    mRequestIdentifier =

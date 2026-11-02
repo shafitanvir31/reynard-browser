@@ -789,6 +789,7 @@
 					"@executable_path/Frameworks",
 					"@executable_path/Frameworks/GeckoView.framework",
 					"@loader_path/Frameworks",
+					"@loader_path/..",
 				);
 				MARKETING_VERSION = 1.0;
 				OTHER_LDFLAGS = (
@@ -846,6 +847,7 @@
 					"@executable_path/Frameworks",
 					"@executable_path/Frameworks/GeckoView.framework",
 					"@loader_path/Frameworks",
+					"@loader_path/..",
 				);
 				MARKETING_VERSION = 1.0;
 				OTHER_LDFLAGS = (
